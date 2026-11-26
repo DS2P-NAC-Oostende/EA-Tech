@@ -16,7 +16,7 @@
 // zichzelf. Dat is de garantie.
 // =============================================================
 
-const VERSIE = "2026-11-26-1138-e415dab";            // ROBOT-VERSIE (niet met de hand wijzigen)
+const VERSIE = "2026-11-26-1144-e415dab";            // ROBOT-VERSIE (niet met de hand wijzigen)
 const PREFIX = "eatech-";      // eigen opslag: alle apps op dit adres delen een opslag
 const CACHE = PREFIX + VERSIE;
 
