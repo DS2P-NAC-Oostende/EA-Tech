@@ -12,6 +12,8 @@
         if (new URLSearchParams(location.search).has("embed")) document.documentElement.classList.add("embed");
     </script>
     <link rel="stylesheet" href="styles.css?v=1">
+    <!-- Welke versie deze pagina is. De robot Versie vult dit. -->
+    <meta name="versie" content="start">
     <meta name="theme-color" content="#0b1530">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-title" content="EA Tech">
@@ -20,6 +22,19 @@
     <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
     <link rel="icon" type="image/png" sizes="16x16" href="favicon-16x16.png">
     <link rel="icon" type="image/png" sizes="192x192" href="icon-192-optimized.png">
+    <style>
+        /* Versieregel onderaan + berichtje na het bijwerken */
+        .versie-regel { margin-top: .4rem; font-size: .72rem; letter-spacing: .04em; opacity: .55; }
+        .bijgewerkt {
+            position: fixed; left: 50%; bottom: 1.25rem; transform: translateX(-50%);
+            z-index: 60; max-width: calc(100% - 2rem);
+            padding: .6rem 1rem; border-radius: 999px;
+            background: #0b1530; color: #f4e3b8; border: 1px solid rgba(244,227,184,.35);
+            font-size: .85rem; box-shadow: 0 .5rem 1.5rem rgba(0,0,0,.35);
+            opacity: 0; transition: opacity .25s ease;
+        }
+        .bijgewerkt.zichtbaar { opacity: 1; }
+    </style>
 </head>
 <body>
 
@@ -62,6 +77,7 @@
 <footer>
     <img src="nac-logo.png" alt="" class="footer-logo">
     <p data-i18n="footer">&copy; 2026 Navy Academy Oostende (NAC) - Direct support To Production (DS2P). Alle rechten voorbehouden.</p>
+    <p class="versie-regel" id="versieRegel"></p>
 </footer>
 
 <!-- Afspeelscherm -->
@@ -79,30 +95,120 @@
 <!-- data.js haalt de videolijst uit de Google Sheet en start daarna app.js en favorieten.js -->
 <script src="data.js?v=1"></script>
 <script>
-if ("serviceWorker" in navigator) {
-    // Automatisch bijwerken, ook op iPhone: een app op het beginscherm wordt bij openen
-    // niet herladen maar "wakker gemaakt". Daarom vragen we zelf of er een nieuwe versie is.
-    const hadAlBeheer = !!navigator.serviceWorker.controller;
+// =============================================================
+// Automatisch bijwerken + versie in beeld
+// -------------------------------------------------------------
+// LEERMODUS - waarom dit nodig is:
+// Een app op het beginscherm wordt bij openen niet herladen, alleen
+// "wakker gemaakt". En op een iPhone blijft hij soms aan de oude
+// bestanden hangen, hoe netjes de service worker het ook vraagt.
+// Daarom doen we drie dingen:
+//  1. bij elk openen zelf vragen of er een nieuwe versie is;
+//  2. staat er een nieuwe klaar, die laten overnemen en eenmaal herladen;
+//  3. loopt de pagina zelf achter, dan onze eigen opslag weggooien en
+//     opnieuw laden. Dat is het vangnet voor de iPhone.
+// Onderaan staat welke versie er draait, zodat je het kunt zien.
+// =============================================================
+(function () {
+    const VERSIEBESTAND = "versie.json";
+    const PREFIX = "eatech-";
+    const VLAG = PREFIX + "bijgewerkt";
+    const NOODVLAG = PREFIX + "noodgreep";
+    const meta = document.querySelector('meta[name="versie"]');
+    const draaiend = meta ? meta.content : "";
+
+    function toonVersie(v) {
+        const regel = document.getElementById("versieRegel");
+        if (regel && v && v.datum) regel.textContent = "Versie van " + v.datum;
+    }
+
+    function meldBijgewerkt() {
+        try { if (sessionStorage.getItem(VLAG) !== "1") return; sessionStorage.removeItem(VLAG); } catch (e) { return; }
+        const m = document.createElement("div");
+        m.className = "bijgewerkt";
+        m.setAttribute("role", "status");
+        m.textContent = "Bijgewerkt naar de nieuwste versie";
+        document.body.appendChild(m);
+        requestAnimationFrame(() => m.classList.add("zichtbaar"));
+        setTimeout(() => { m.classList.remove("zichtbaar"); setTimeout(() => m.remove(), 400); }, 3500);
+    }
+    document.addEventListener("DOMContentLoaded", meldBijgewerkt);
+
     let herladen = false;
     function herlaad() {
         if (herladen) return;
         const modal = document.getElementById("videoModal");
-        if (modal && modal.classList.contains("open")) {
-            new MutationObserver((m, o) => { if (!modal.classList.contains("open")) { o.disconnect(); herlaad(); } })
-                .observe(modal, { attributes: true, attributeFilter: ["class"] });
+        if (modal && modal.classList.contains("open")) {      // video speelt: even wachten
+            new MutationObserver((m, o) => {
+                if (!modal.classList.contains("open")) { o.disconnect(); herlaad(); }
+            }).observe(modal, { attributes: true, attributeFilter: ["class"] });
             return;
         }
         herladen = true;
+        try { sessionStorage.setItem(VLAG, "1"); } catch (e) {}
         location.reload();
     }
-    navigator.serviceWorker.addEventListener("controllerchange", () => { if (hadAlBeheer) herlaad(); });
-    navigator.serviceWorker.register("./sw.js", { scope: "./", updateViaCache: "none" }).then(reg => {
-        const controleer = () => reg.update().catch(() => {});
-        document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") controleer(); });
-        window.addEventListener("pageshow", e => { if (e.persisted) controleer(); });
-        setInterval(controleer, 30 * 60 * 1000);
+
+    function haalVersie() {
+        return fetch(VERSIEBESTAND, { cache: "no-store" })
+            .then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    }
+
+    function wachtOpNieuweBeheerder(ms) {
+        return new Promise((ok) => {
+            let klaar = false;
+            const stop = setTimeout(() => { if (!klaar) { klaar = true; ok(false); } }, ms);
+            navigator.serviceWorker.addEventListener("controllerchange", () => {
+                if (!klaar) { klaar = true; clearTimeout(stop); ok(true); }
+            }, { once: true });
+        });
+    }
+
+    async function controleer(reg) {
+        const live = await haalVersie();
+        if (live) toonVersie(live);
+        if (!live || !live.versie || !draaiend) return;
+        if (live.versie === draaiend) return;                 // we draaien de nieuwste
+
+        if (reg) {
+            await reg.update().catch(() => {});
+            if (reg.waiting) reg.waiting.postMessage("neem-over");
+            if (await wachtOpNieuweBeheerder(3000)) return;    // controllerchange herlaadt zelf
+        }
+
+        try {
+            if (sessionStorage.getItem(NOODVLAG) === "1") return;   // al geprobeerd, geen lus
+            sessionStorage.setItem(NOODVLAG, "1");
+        } catch (e) {}
+        try {
+            const namen = await caches.keys();
+            await Promise.all(namen.filter((n) => n.startsWith(PREFIX)).map((n) => caches.delete(n)));
+        } catch (e) {}
+        herlaad();
+    }
+
+    if (!("serviceWorker" in navigator)) { controleer(null); return; }
+
+    let beheerd = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+        if (beheerd) herlaad(); else beheerd = true;
     });
-}
+
+    navigator.serviceWorker.register("./sw.js", { scope: "./", updateViaCache: "none" }).then((reg) => {
+        reg.addEventListener("updatefound", () => {
+            const nieuw = reg.installing;
+            if (nieuw) nieuw.addEventListener("statechange", () => {
+                if (nieuw.state === "installed" && reg.waiting) reg.waiting.postMessage("neem-over");
+            });
+        });
+        controleer(reg);
+        document.addEventListener("visibilitychange", () => {
+            if (document.visibilityState === "visible") controleer(reg);
+        });
+        window.addEventListener("pageshow", (e) => { if (e.persisted) controleer(reg); });
+        setInterval(() => controleer(reg), 30 * 60 * 1000);
+    }).catch(() => controleer(null));
+})();
 </script>
 </body>
 </html>
