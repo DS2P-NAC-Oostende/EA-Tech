@@ -1,0 +1,45 @@
+# Versierobot: zet bij elke wijziging een nieuw versienummer in sw.js en versie.json.
+# LEERMODUS: 'on' zegt WANNEER de robot werkt, 'steps' zegt WAT hij doet.
+# Waarom: een telefoon herlaadt de app alleen als sw.js verandert. Door dat
+# bestand automatisch mee te laten veranderen, krijgt iedereen altijd de
+# nieuwste versie. Je hoeft zelf nooit meer een versienummer bij te werken.
+name: Versie
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "versie.json"          # eigen commit niet opnieuw behandelen
+      - ".github/**"
+      - "README.md"
+  workflow_dispatch:            # knop "Run workflow" om hem zelf te starten
+
+permissions:
+  contents: write               # nodig om het nieuwe versienummer vast te leggen
+
+concurrency:
+  group: versie                 # nooit twee versierobots door elkaar
+
+jobs:
+  versie:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Versienummer bepalen en wegschrijven
+        run: python .github/scripts/versie.py
+      - name: Vastleggen (alleen als er iets veranderd is)
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            git config user.name "Versierobot"
+            git config user.email "actions@github.com"
+            git add sw.js versie.json index.html
+            git commit -m "Versie bijgewerkt [robot]"
+            git push
+            echo "Nieuw versienummer vastgelegd."
+          else
+            echo "Niets veranderd, geen nieuw versienummer nodig."
+          fi
